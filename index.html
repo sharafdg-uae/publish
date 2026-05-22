@@ -399,7 +399,6 @@
     <p>Enter the access passcode to view candidate submissions and scores.</p>
     <input type="password" id="passInput" placeholder="Passcode" onkeydown="if(event.key==='Enter')tryUnlock()">
     <button class="btn btn-blue" style="width:100%;justify-content:center" onclick="tryUnlock()">Unlock Dashboard</button>
-    <p style="margin:14px 0 0;font-size:.78rem">Default passcode: <b>sharafdg2026</b> — change it in the code.</p>
   </div>
 
   <!-- dashboard content -->
@@ -459,7 +458,7 @@
 ============================================================ */
 const CONFIG = {
   backendUrl: "",
-  passcode: "sharafdg2026"
+  passcode: "reCru$26sDG@?"
 };
 
 /* ---------- Scoring model (weights total = 100) ---------- */
@@ -485,22 +484,53 @@ function scoreSubmission(a){
   return { breakdown:b, overall, mandatoryPass:a.arabic==='yes' };
 }
 
-/* ---------- Storage layer (shared so multiple devices contribute) ---------- */
-const KEY_PREFIX='cand:';
+/* ---------- Local storage layer (IndexedDB — works on any website) ---------- */
+const DB_NAME='talentmatch', STORE='candidates';
+function openDB(){
+  return new Promise((res,rej)=>{
+    const rq=indexedDB.open(DB_NAME,1);
+    rq.onupgradeneeded=()=>{ if(!rq.result.objectStoreNames.contains(STORE)) rq.result.createObjectStore(STORE,{keyPath:'id'}); };
+    rq.onsuccess=()=>res(rq.result);
+    rq.onerror=()=>rej(rq.error);
+  });
+}
 async function saveLocal(sub){
-  try{ await window.storage.set(KEY_PREFIX+sub.id, JSON.stringify(sub), true); return true; }
-  catch(e){ console.error('storage.set failed',e); return false; }
+  try{
+    const db=await openDB();
+    return await new Promise((res,rej)=>{
+      const tx=db.transaction(STORE,'readwrite');
+      tx.objectStore(STORE).put(sub);
+      tx.oncomplete=()=>res(true); tx.onerror=()=>rej(tx.error);
+    });
+  }catch(e){ console.error('IndexedDB save failed',e); return false; }
 }
 async function getAllLocal(){
-  let out=[];
   try{
-    const res=await window.storage.list(KEY_PREFIX,true);
-    const keys=(res&&res.keys)||[];
-    for(const k of keys){
-      try{ const r=await window.storage.get(k,true); if(r&&r.value) out.push(JSON.parse(r.value)); }catch(_){}
-    }
-  }catch(e){ console.error('storage.list failed',e); }
-  return out;
+    const db=await openDB();
+    return await new Promise((res,rej)=>{
+      const tx=db.transaction(STORE,'readonly');
+      const rq=tx.objectStore(STORE).getAll();
+      rq.onsuccess=()=>res(rq.result||[]); rq.onerror=()=>rej(rq.error);
+    });
+  }catch(e){ console.error('IndexedDB read failed',e); return []; }
+}
+/* JSONP read from the Apps Script backend (cross-origin safe) */
+function jsonp(url){
+  return new Promise((res,rej)=>{
+    const cb='tmcb_'+Date.now()+'_'+Math.floor(Math.random()*1e4);
+    const s=document.createElement('script');
+    const done=(ok,data)=>{ delete window[cb]; s.remove(); ok?res(data):rej(data); };
+    window[cb]=d=>done(true,d);
+    s.onerror=()=>done(false,new Error('jsonp network error'));
+    s.src=url+(url.includes('?')?'&':'?')+'callback='+cb+'&t='+Date.now();
+    document.body.appendChild(s);
+    setTimeout(()=>{ if(window[cb]) done(false,new Error('jsonp timeout')); },12000);
+  });
+}
+async function getAllRemote(){
+  if(!CONFIG.backendUrl) return [];
+  try{ const r=await jsonp(CONFIG.backendUrl); return (r&&r.ok&&Array.isArray(r.submissions))?r.submissions:[]; }
+  catch(e){ console.warn('backend read failed',e); return []; }
 }
 
 /* ---------- Backend (optional Google Drive via Apps Script) ---------- */
@@ -631,9 +661,14 @@ function resetToForm(){ document.getElementById('view-done').classList.add('hidd
 /* ---------- Dashboard rendering ---------- */
 let DATA=[];
 async function loadSubmissions(showSpin){
-  DATA=(await getAllLocal()).sort((x,y)=>y.overall-x.overall || new Date(y.ts)-new Date(x.ts));
+  const [local,remote]=await Promise.all([getAllLocal(),getAllRemote()]);
+  const map={};
+  remote.forEach(s=>{ if(s&&s.id) map[s.id]=s; });          // backend (all devices) first
+  local.forEach(s=>{ if(s&&s.id) map[s.id]=Object.assign({},map[s.id]||{},s); }); // local adds CV file for this browser
+  DATA=Object.values(map).sort((x,y)=>y.overall-x.overall || new Date(y.ts)-new Date(x.ts));
   renderStats(); renderTop5(); renderTable();
-  if(showSpin) document.getElementById('dashSub').textContent=`Live ranking · last updated ${new Date().toLocaleTimeString()}`;
+  const src=CONFIG.backendUrl?'synced with Google Drive':'this browser only — connect backend for all devices';
+  if(showSpin) document.getElementById('dashSub').textContent=`Live ranking · ${src} · updated ${new Date().toLocaleTimeString()}`;
 }
 function scoreClass(s){return s>=75?'hi':s<50?'lo':'';}
 function renderStats(){
@@ -687,7 +722,11 @@ function ringSVG(score){
 }
 function openCandidate(id){
   const d=DATA.find(x=>x.id===id); if(!d) return;
-  const cvBtn=d.cv? `<button class="btn btn-blue" onclick="downloadCV('${d.id}')">⬇ Download CV (${esc(d.cv.name)})</button>` :'<span style="color:var(--muted);font-size:.85rem">No CV attached</span>';
+  const cvBtn = (d.cv && d.cv.base64)
+    ? `<button class="btn btn-blue" onclick="downloadCV('${d.id}')">⬇ Download CV (${esc(d.cv.name)})</button>`
+    : (d.cvUrl
+      ? `<a class="btn btn-blue" href="${esc(d.cvUrl)}" target="_blank" rel="noopener">⬇ Open CV in Google Drive</a>`
+      : '<span style="color:var(--muted);font-size:.85rem">No CV attached</span>');
   const bd=d.breakdown.map(r=>{const pct=Math.round(r.score/r.max*100);const col=pct>=75?'#1f9d6b':pct<50?'#d24545':'#0079c1';
     return `<div class="bd-row"><span class="lab">${r.label}</span>
       <span class="bar"><i style="width:${pct}%;background:${col}"></i></span>
