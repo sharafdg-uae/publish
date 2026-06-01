@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <title>Arabic Web Developer — Pre-Screening</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -443,7 +446,7 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<footer class="appfoot">TalentMatch · Internal pre-screening tool · Built for the Arabic Web Developer & Marketing Technology role.</footer>
+<footer class="appfoot">TalentMatch · Internal pre-screening tool · Built for the Arabic Web Developer & Marketing Technology role.<br><span style="font-size:.72rem;opacity:.7">Build: v2.1 · IndexedDB · 2026-05-26</span></footer>
 
 <script>
 /* ============================================================
@@ -460,6 +463,11 @@ const CONFIG = {
   backendUrl: "",
   passcode: "reCru$26sDG@?"
 };
+const APP_VERSION = "v2.1 · IndexedDB build · 2026-05-26";
+function newId(){
+  try{ if(window.crypto && crypto.randomUUID) return 'c_'+crypto.randomUUID(); }catch(_){}
+  return 'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,9);
+}
 
 /* ---------- Scoring model (weights total = 100) ---------- */
 const WEIGHTS = { arabic:15, education:8, experience:10, workstyle:4, resp:12,
@@ -639,13 +647,18 @@ document.getElementById('screenForm').addEventListener('submit',async function(e
   if(!ok){ toast('Please complete the highlighted fields'); const f=document.querySelector('.field.invalid');if(f)f.scrollIntoView({behavior:'smooth',block:'center'}); return; }
 
   const sc=scoreSubmission(a);
-  const sub={ id:'c_'+Date.now()+'_'+Math.random().toString(36).slice(2,7), ts:new Date().toISOString(),
+  const sub={ id:newId(), ts:new Date().toISOString(),
     ...a, cv:cvData, overall:sc.overall, breakdown:sc.breakdown, mandatoryPass:sc.mandatoryPass };
 
   const btn=document.getElementById('submitBtn'); btn.disabled=true; btn.textContent='Submitting…';
-  await saveLocal(sub);
-  await pushToBackend(sub);
+  const savedLocally=await saveLocal(sub);
+  if(CONFIG.backendUrl) await pushToBackend(sub);
   btn.disabled=false; btn.textContent='Submit Application →';
+
+  if(!savedLocally && !CONFIG.backendUrl){
+    toast('Could not save in this browser — private mode or blocked storage. Please try another browser.');
+    return;
+  }
 
   document.getElementById('doneName').textContent=a.fullName;
   document.getElementById('view-apply').classList.add('hidden');
